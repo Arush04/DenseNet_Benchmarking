@@ -22,11 +22,9 @@
   - [ Prerequisites](#-prerequisites)
   - [ Installation](#-installation)
   - [ Usage](#-usage)
-  - [ Testing](#-testing)
-- [ Project Roadmap](#-project-roadmap)
-- [ Contributing](#-contributing)
-- [ License](#-license)
-- [ Acknowledgments](#-acknowledgments)
+- [ Optimization Approaches](#-optimzation-approaches)
+- [ Profiling Approach Across All Variants](#-profiling-approach-across-all-variants)
+- [ Results Summary](#-results-summary)
 
 ---
 
@@ -129,7 +127,7 @@ Execution Details:
 - PyTorch profiler is not used; ORT does not expose kernel-level profiling through PyTorch.
 - Accuracy evaluation is optional for speed.
 
-### Profiling Approach Across All Variants
+## Profiling Approach Across All Variants
 
 Wall-clock Latency:
 Measures real-world time per batch, including CPU-GPU transfer overhead.
@@ -150,7 +148,7 @@ PyTorch Profiler Metrics:
 - CSV Output: All metrics (latency, throughput, memory, utilization, accuracy, model size) are saved in a benchmark_results.csv file.
 
 ---
-### Results Summary
+## Results Summary
 --batch-size 16 --device cuda --iters 200  
 ```sh
 ❯ === Benchmark Summary ===
