@@ -72,6 +72,11 @@ Install DenseNet_Benchmarking using one of the following methods:
 ❯ cd DenseNet_Benchmarking
 ```
 
+3. Enable Execution:
+```sh
+❯ chmod +x build_and_run.sh
+```
+
 
 ###  Usage
 Run DenseNet_Benchmarking using the following command:
