@@ -91,11 +91,15 @@ def evaluate_accuracy(model, dataloader, device, max_batches=8, use_amp=False):
         for i, (imgs, labels) in enumerate(dataloader):
             imgs = imgs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
+            print(f"labels>>>> {labels[:10]}")
             if use_amp and device.type == "cuda":
                 with torch.cuda.amp.autocast():
                     outs = model(imgs)
             else:
                 outs = model(imgs)
+            print("outs shape:", outs.shape)
+            print("preds:", outs.argmax(1)[:10].cpu().tolist())
+
             acc = compute_topk(outs, labels, ks=(1,5))
             top1_list.append(acc["top1"])
             top5_list.append(acc["top5"])
@@ -352,6 +356,29 @@ def run_onnx_inference(onnx_path: str, dataloader: DataLoader, device: torch.dev
     }
     return metrics
 
+# ---------------------
+# Tracing (TorchScript)
+# ---------------------
+def make_torchscript(model: nn.Module, example_input: torch.Tensor, device: torch.device):
+    activities = [ProfilerActivity.CPU]
+    # if device.type == 'cuda':
+        # activities.append(ProfilerActivity.CUDA)
+
+    with profile(activities=activities, profile_memory=True, record_shapes=True) as prof:
+        with record_function("torchscript_trace"):
+            model_cpu = model.to('cpu').eval()
+            with torch.no_grad():
+                traced = torch.jit.trace(model_cpu, example_input.cpu())
+            traced = traced.to(device)
+
+    sort_by_key = "cpu_time_total"
+    print(f"[torchscript] Tracing profile:")
+    print(prof.key_averages().table(sort_by=sort_by_key, row_limit=5))
+    # Extract total CPU time in seconds
+    total_cpu_time_us = sum(e.self_cpu_time_total for e in prof.key_averages())
+    load_time_s = total_cpu_time_us / 1e6
+    return traced, load_time_s
+
 # ----------------------------
 # Orchestrator: run all variants
 # ----------------------------
@@ -450,9 +477,10 @@ def run_all(args):
     # ONNX -> ORT (not profiled by torch.profiler; measure wall time & accuracy)
     if ONNX_AVAILABLE:
         try:
+            model_cpu = model.to("cpu").eval()
             onnx_path = os.path.join(out_dir, "densenet121.onnx")
-            dummy = torch.randn(args.batch_size, 3, 224, 224).to(device)
-            torch.onnx.export(model, dummy.cpu(), onnx_path, export_params=True, opset_version=12,
+            dummy = torch.randn(args.batch_size, 3, 224, 224)
+            torch.onnx.export(model_cpu, dummy, onnx_path, export_params=True, opset_version=12,
                               input_names=['input'], output_names=['output'], dynamic_axes={'input': {0: 'batch_size'}})
             onnx_metrics = run_onnx_inference(onnx_path, val_loader, device, args.batch_size, writer=writer, iters=args.iters)
             onnx_metrics["model_load_time_s"] = load_time_s
@@ -505,7 +533,6 @@ def run_all(args):
     print(f"TensorBoard logs: {tb_logs}")
     print(f"Profiles: {profiles_dir}")
     print(f"Models: {models_dir}")
-    print(f"results>>>> {results}")
     return results
 
 # ----------------------------
@@ -513,7 +540,8 @@ def run_all(args):
 # ----------------------------
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output-dir", type=str, default="/app/results", help="output dir (mounted) for CSV/logs/models")
+    # parser.add_argument("--output-dir", type=str, default="/app/results", help="output dir (mounted) for CSV/logs/models")
+    parser.add_argument("--output-dir", type=str, default="results", help="output dir (mounted) for CSV/logs/models")
     parser.add_argument("--device", type=str, default="cuda", help="cuda or cpu")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=2)
