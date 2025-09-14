@@ -30,7 +30,8 @@ from torch.utils.tensorboard import SummaryWriter
 from torch import nn
 from torch.profiler import profile, record_function, ProfilerActivity, schedule, tensorboard_trace_handler, ProfilerActivity
 
-# Optional ONNX/ORT
+
+os.environ["KINETO_LOG_LEVEL"] = "5"
 ONNX_AVAILABLE = False
 try:
     import onnx
@@ -47,9 +48,10 @@ def load_model(device: torch.device):
     if device.type == 'cuda':
         activities.append(ProfilerActivity.CUDA)
 
-    with profile(activities=activities, profile_memory=True, record_shapes=True) as prof:
+    with profile(activities=activities, profile_memory=True, record_shapes=True, on_trace_ready=None) as prof:
         with record_function("model_loading"):
             model = torchvision.models.densenet121(weights=torchvision.models.DenseNet121_Weights.IMAGENET1K_V1)
+            model.classifier = nn.Linear(model.classifier.in_features, 10)
             model.eval()
             model.to(device)
 
@@ -65,8 +67,8 @@ def make_dataloaders(batch_size: int, num_workers: int = 2, max_eval_batches: in
         T.ToTensor(),
         T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
-    train_set = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    val_set = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+    train_set = torchvision.datasets.CIFAR10(root='./data', train=True, download=False, transform=transform)
+    val_set = torchvision.datasets.CIFAR10(root='./data', train=False, download=False, transform=transform)
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
@@ -91,14 +93,11 @@ def evaluate_accuracy(model, dataloader, device, max_batches=8, use_amp=False):
         for i, (imgs, labels) in enumerate(dataloader):
             imgs = imgs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
-            print(f"labels>>>> {labels[:10]}")
             if use_amp and device.type == "cuda":
                 with torch.cuda.amp.autocast():
                     outs = model(imgs)
             else:
                 outs = model(imgs)
-            print("outs shape:", outs.shape)
-            print("preds:", outs.argmax(1)[:10].cpu().tolist())
 
             acc = compute_topk(outs, labels, ks=(1,5))
             top1_list.append(acc["top1"])
@@ -364,7 +363,7 @@ def make_torchscript(model: nn.Module, example_input: torch.Tensor, device: torc
     # if device.type == 'cuda':
         # activities.append(ProfilerActivity.CUDA)
 
-    with profile(activities=activities, profile_memory=True, record_shapes=True) as prof:
+    with profile(activities=activities, profile_memory=True, record_shapes=True, on_trace_ready=None) as prof:
         with record_function("torchscript_trace"):
             model_cpu = model.to('cpu').eval()
             with torch.no_grad():
