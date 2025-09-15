@@ -25,6 +25,10 @@
 - [ Optimization Approaches](#-optimzation-approaches)
 - [ Profiling Approach Across All Variants](#-profiling-approach-across-all-variants)
 - [ Results Summary](#-results-summary)
+- [ Performance Analysis](#-performance-analysis)
+- [ Trade-offs Discussion](#-trade-offs-discussion)
+- [ Known Limitations](#-known-limitations)
+- [ Future Improvements](#-future-improvements)
 
 ---
 
@@ -162,3 +166,33 @@ amp_autocast    | batch 16 | dev cuda   | lat 418.49 ms | thr 38.23 sps | top1 1
 torchscript     | batch 16 | dev cuda   | lat 634.74 ms | thr 25.21 sps | top1 12.5
 onnx_ort        | batch 16 | dev cuda   | lat 978.53 ms | thr 16.35 sps | top1 None
 ```
+
+---
+## Performance Analysis
+We benchmarked DenseNet121 on CIFAR-10 using different optimization techniques: baseline (FP32), AMP autocast, TorchScript, and ONNX Runtime.
+
+- AMP autocast achieved the lowest latency (~418 ms) and highest throughput (~38 samples/sec), showing clear gains in efficiency with minimal accuracy change.
+- TorchScript offered a modest speedup compared to baseline but had higher model load overhead (~37 s).
+- ONNX Runtime produced the slowest inference (~978 ms latency) and lowest throughput, indicating suboptimal backend support for this setup.
+- Accuracy remained consistent across optimizations (~12.5% top-1, ~62.5% top-5), which is expected given the model was re-purposed from ImageNet to CIFAR-10 without full retraining.
+
+---
+## Trade-offs Discussion
+
+- AMP Autocast trades some numerical precision for speed but maintained identical accuracy in this benchmark.
+- TorchScript improves deployability and compatibility but introduces longer model load times.
+- ONNX Runtime enables portability across runtimes but suffers from significant performance penalties here.
+- A key trade-off is between latency vs. portability: while ONNX is attractive for cross-framework deployment, PyTorch-native optimizations yield better GPU performance.
+
+---
+## Known Limitations
+- Dataset mismatch: DenseNet121 pretrained on ImageNet was only partially adapted (last layer modified), leading to low absolute accuracy on CIFAR-10.
+- Limited profiling scope: Benchmarks were run with a single batch size (16) and a capped evaluation set, which may not generalize to real-world usage.
+- Docker setup introduces dependency overheads and slow dataset download times.
+
+---
+## Future Improvements
+
+- Full model fine-tuning on CIFAR-10 to significantly boost accuracy metrics.
+- Broader benchmarking with varying batch sizes, larger iteration counts, and multiple datasets for more representative results.
+- Advanced optimizations: explore quantization (INT8), TorchDynamo, and PyTorch 2.0 compilers (torch.compile) for further latency reduction.
