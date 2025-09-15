@@ -31,7 +31,7 @@ from torch import nn
 from torch.profiler import profile, record_function, ProfilerActivity, schedule, tensorboard_trace_handler, ProfilerActivity
 
 
-os.environ["KINETO_LOG_LEVEL"] = "5"
+os.environ["KINETO_LOG_LEVEL"] = "5" # this removed all pytorch profilers cpp backend logs
 ONNX_AVAILABLE = False
 try:
     import onnx
@@ -44,6 +44,11 @@ except Exception:
 # Utils
 # ----------------------------
 def load_model(device: torch.device):
+    """
+    This function initializes a pretrained DenseNet121 (ImageNet weights), replaces
+    the classifier layer to output 10 classes for CIFAR-10, moves the model to the
+    specified device
+    """
     activities = [ProfilerActivity.CPU]
     if device.type == 'cuda':
         activities.append(ProfilerActivity.CUDA)
@@ -51,7 +56,7 @@ def load_model(device: torch.device):
     with profile(activities=activities, profile_memory=True, record_shapes=True, on_trace_ready=None) as prof:
         with record_function("model_loading"):
             model = torchvision.models.densenet121(weights=torchvision.models.DenseNet121_Weights.IMAGENET1K_V1)
-            model.classifier = nn.Linear(model.classifier.in_features, 10)
+            model.classifier = nn.Linear(model.classifier.in_features, 10) # predict for 10 classes instead of 100
             model.eval()
             model.to(device)
 
@@ -62,6 +67,11 @@ def load_model(device: torch.device):
     return model, prof
 
 def make_dataloaders(batch_size: int, num_workers: int = 2, max_eval_batches: int = 16):
+    """
+    This function prepares CIFAR-10 datasets with torchvision transforms, including
+    resizing to 224x224, tensor conversion, and normalization. It then constructs
+    DataLoaders for both training and validation splits.
+    """
     transform = T.Compose([
         T.Resize(224),
         T.ToTensor(),
@@ -75,7 +85,11 @@ def make_dataloaders(batch_size: int, num_workers: int = 2, max_eval_batches: in
     return train_loader, val_loader
 
 def compute_topk(outputs: torch.Tensor, targets: torch.Tensor, ks=(1,5)):
-    """Return top-k in percent for this batch."""
+    """
+    This function evaluates how often the true class label is within the top-k
+    predicted classes, for each k in `ks`. Results are returned as percentages
+    relative to the batch size.
+    """
     maxk = max(ks)
     _, pred = outputs.topk(maxk, 1, True, True)
     pred = pred.t()
@@ -87,6 +101,11 @@ def compute_topk(outputs: torch.Tensor, targets: torch.Tensor, ks=(1,5)):
     return res
 
 def evaluate_accuracy(model, dataloader, device, max_batches=8, use_amp=False):
+    """
+    Iterates through the dataloader for up to `max_batches` batches and computes
+    average top-1 and top-5 accuracy across the evaluated batches. Optionally uses
+    automatic mixed precision (AMP) for faster inference on CUDA devices.
+    """
     model.eval()
     top1_list, top5_list = [], []
     with torch.no_grad():
@@ -110,6 +129,11 @@ def evaluate_accuracy(model, dataloader, device, max_batches=8, use_amp=False):
     }
 
 def save_model_checkpoint(model, path: str):
+    """
+    This function creates the necessary directories (if they do not exist),
+    serializes the model's state dictionary to the specified path, and then
+    reports the checkpoint file size in megabytes.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(model.state_dict(), path)
     return os.path.getsize(path) / (1024.0 * 1024.0)  # MB
@@ -132,7 +156,6 @@ def profile_pytorch_variant(model: nn.Module,
       - profiler aggregates: cpu_time_total, cuda_time_total
       - memory: max_memory_allocated, max_memory_reserved (CUDA only)
       - profiler trace saved to logdir/profile_<variant>
-    Note: uses torch.profiler for kernel-level metrics and memory; does not use system metrics.
     """
     model.eval()
     tb_profile_dir = os.path.join(logdir, "tensorboard")
@@ -192,14 +215,14 @@ def profile_pytorch_variant(model: nn.Module,
             torch.cuda.synchronize()
 
         # The profiler collects kernel times and memory automatically.
-        # We still collect wall time latency via Python timing for throughput calculation,
-        # but we **also** extract CPU/GPU kernel times from the profiler below.
+        # We collect wall time latency via Python timing for throughput calculation,
+        # we **also** extract CPU/GPU kernel times from the profiler below.
         # For strict PyTorch-kernel-only measures, use values from prof.key_averages().
         prof.step()
     prof.__exit__(None, None, None)
 
     # Average latency/throughput calculation (use dataloader batch time via another loop for wall-clock)
-    # We'll compute wall-clock latencies here separately (small loop)
+    # Compute wall-clock latencies here separately (small loop)
     wall_latencies = []
     loader_it = iter(dataloader)
     for i in range(iters):
@@ -295,7 +318,7 @@ def profile_pytorch_variant(model: nn.Module,
 def run_onnx_inference(onnx_path: str, dataloader: DataLoader, device: torch.device, batch_size: int, writer: SummaryWriter = None, iters: int = 50):
     """
     Run ONNX Runtime inference and collect wall-clock latency/throughput and accuracy.
-    Note: torch.profiler cannot profile ORT kernels. We still collect wall time & accuracy.
+    Note: torch.profiler cannot profile ORT kernels.
     """
     if not ONNX_AVAILABLE:
         raise RuntimeError("ONNX/ORT not available")
@@ -359,9 +382,12 @@ def run_onnx_inference(onnx_path: str, dataloader: DataLoader, device: torch.dev
 # Tracing (TorchScript)
 # ---------------------
 def make_torchscript(model: nn.Module, example_input: torch.Tensor, device: torch.device):
+    """
+    This function moves the given model to CPU, performs TorchScript tracing
+    using the provided example input, and then moves the traced model back to
+    the target device. Profiling captures CPU execution time during the trace.
+    """
     activities = [ProfilerActivity.CPU]
-    # if device.type == 'cuda':
-        # activities.append(ProfilerActivity.CUDA)
 
     with profile(activities=activities, profile_memory=True, record_shapes=True, on_trace_ready=None) as prof:
         with record_function("torchscript_trace"):
@@ -382,6 +408,12 @@ def make_torchscript(model: nn.Module, example_input: torch.Tensor, device: torc
 # Orchestrator: run all variants
 # ----------------------------
 def run_all(args):
+    """
+    This function runs benchmarking experiments for different optimization
+    techniques (baseline PyTorch, AMP autocast, TorchScript, and ONNX/ORT if available),
+    evaluates performance and accuracy, saves results to CSV, and logs profiling
+    data to TensorBoard.
+    """
     device = torch.device(args.device if (args.device == 'cpu' or torch.cuda.is_available()) else 'cpu')
     print("Using device:", device)
     train_loader, val_loader = make_dataloaders(args.batch_size, num_workers=args.num_workers)
